@@ -12,7 +12,9 @@ cd "$(dirname "$0")/.."
 source e2e/lib.sh
 
 REQUESTS="${REQUESTS:-300}"
-URL="http://echo.team-a-backend.svc.cluster.local:8080/hostname"
+# Fully qualified (trailing dot): the probe measures the service, not the
+# resolver walking the pod's DNS search path (ndots:5) on every request.
+URL="http://echo.team-a-backend.svc.cluster.local.:8080/hostname"
 
 # probe <label>: REQUESTS sequential requests frontend -> backend, measured by curl.
 probe() {
