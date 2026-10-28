@@ -1,0 +1,245 @@
+apiVersion: policies.kyverno.io/v1
+kind: GeneratingPolicy
+metadata:
+  name: tenant-onboarding
+  annotations:
+    policies.kyverno.io/title: Tenant Onboarding
+    policies.kyverno.io/category: Multi-Tenancy
+    policies.kyverno.io/subject: Namespace
+    policies.kyverno.io/description: >-
+      Turns every namespace labelled tenancy.io/tenant into an isolated tenant
+      namespace: RoleBindings for the tenant's admin, developer and viewer
+      groups, a ResourceQuota and a priority-class quota sized by the
+      tenancy.io/tier label, a LimitRange with container defaults, and
+      NetworkPolicies that deny everything except DNS and traffic inside the
+      same tenant. synchronize keeps the created objects in their declared
+      state: a deleted or edited object is recreated or reverted.
+spec:
+  evaluation:
+    synchronize:
+      enabled: true
+    generateExisting:
+      enabled: true
+  matchConstraints:
+    resourceRules:
+      - apiGroups: [""]
+        apiVersions: [v1]
+        operations: [CREATE, UPDATE]
+        resources: [namespaces]
+  matchConditions:
+    - name: is-tenant-namespace
+      expression: >-
+        has(object.metadata.labels) && 'tenancy.io/tenant' in object.metadata.labels
+  variables:
+    - name: ns
+      expression: object.metadata.name
+    - name: tenant
+      expression: object.metadata.labels['tenancy.io/tenant']
+    # Tier sizes. Raising a team's quota means moving it to another tier
+    # (a one-line change in tenants/<team>.yaml), not hand-editing objects.
+    - name: tiers
+      expression: >-
+        {
+          "small": {
+            "requestsCpu": "1", "requestsMemory": "1Gi",
+            "limitsCpu": "2", "limitsMemory": "2Gi",
+            "pods": "10", "services": "5", "pvcs": "2",
+            "highPriorityPods": "0",
+            "maxCpu": "1", "maxMemory": "1Gi"
+          },
+          "medium": {
+            "requestsCpu": "2", "requestsMemory": "4Gi",
+            "limitsCpu": "4", "limitsMemory": "8Gi",
+            "pods": "30", "services": "10", "pvcs": "5",
+            "highPriorityPods": "5",
+            "maxCpu": "2", "maxMemory": "2Gi"
+          },
+          "large": {
+            "requestsCpu": "4", "requestsMemory": "8Gi",
+            "limitsCpu": "8", "limitsMemory": "16Gi",
+            "pods": "60", "services": "20", "pvcs": "10",
+            "highPriorityPods": "10",
+            "maxCpu": "4", "maxMemory": "4Gi"
+          }
+        }
+    # An unknown tier is rejected by tenant-namespace-contract; falling back to
+    # the smallest tier here keeps generation safe if that check is ever bypassed.
+    - name: tierName
+      expression: >-
+        object.metadata.labels[?'tenancy.io/tier'].orValue('small') in variables.tiers
+        ? object.metadata.labels[?'tenancy.io/tier'].orValue('small') : 'small'
+    - name: tier
+      expression: variables.tiers[variables.tierName]
+  generate:
+    - template:
+        interpolate: cel
+        value: |
+          apiVersion: rbac.authorization.k8s.io/v1
+          kind: RoleBinding
+          metadata:
+            name: tenant-admins
+            namespace: (( variables.ns ))
+            labels:
+              tenancy.io/tenant: (( variables.tenant ))
+              tenancy.io/managed-by: tenant-onboarding
+          roleRef:
+            apiGroup: rbac.authorization.k8s.io
+            kind: ClusterRole
+            name: tenant-admin
+          subjects:
+            - apiGroup: rbac.authorization.k8s.io
+              kind: Group
+              name: (( variables.tenant + ':admins' ))
+          ---
+          apiVersion: rbac.authorization.k8s.io/v1
+          kind: RoleBinding
+          metadata:
+            name: tenant-developers
+            namespace: (( variables.ns ))
+            labels:
+              tenancy.io/tenant: (( variables.tenant ))
+              tenancy.io/managed-by: tenant-onboarding
+          roleRef:
+            apiGroup: rbac.authorization.k8s.io
+            kind: ClusterRole
+            name: tenant-developer
+          subjects:
+            - apiGroup: rbac.authorization.k8s.io
+              kind: Group
+              name: (( variables.tenant + ':developers' ))
+          ---
+          apiVersion: rbac.authorization.k8s.io/v1
+          kind: RoleBinding
+          metadata:
+            name: tenant-viewers
+            namespace: (( variables.ns ))
+            labels:
+              tenancy.io/tenant: (( variables.tenant ))
+              tenancy.io/managed-by: tenant-onboarding
+          roleRef:
+            apiGroup: rbac.authorization.k8s.io
+            kind: ClusterRole
+            name: tenant-viewer
+          subjects:
+            - apiGroup: rbac.authorization.k8s.io
+              kind: Group
+              name: (( variables.tenant + ':viewers' ))
+          ---
+          apiVersion: v1
+          kind: ResourceQuota
+          metadata:
+            name: tenant-quota
+            namespace: (( variables.ns ))
+            labels:
+              tenancy.io/tenant: (( variables.tenant ))
+              tenancy.io/tier: (( variables.tierName ))
+              tenancy.io/managed-by: tenant-onboarding
+          spec:
+            hard:
+              requests.cpu: (( variables.tier.requestsCpu ))
+              requests.memory: (( variables.tier.requestsMemory ))
+              limits.cpu: (( variables.tier.limitsCpu ))
+              limits.memory: (( variables.tier.limitsMemory ))
+              pods: (( variables.tier.pods ))
+              services: (( variables.tier.services ))
+              persistentvolumeclaims: (( variables.tier.pvcs ))
+              services.loadbalancers: "0"
+              services.nodeports: "0"
+          ---
+          apiVersion: v1
+          kind: ResourceQuota
+          metadata:
+            name: tenant-high-priority
+            namespace: (( variables.ns ))
+            labels:
+              tenancy.io/tenant: (( variables.tenant ))
+              tenancy.io/tier: (( variables.tierName ))
+              tenancy.io/managed-by: tenant-onboarding
+          spec:
+            hard:
+              pods: (( variables.tier.highPriorityPods ))
+            scopeSelector:
+              matchExpressions:
+                - scopeName: PriorityClass
+                  operator: In
+                  values: [tenant-high]
+          ---
+          apiVersion: v1
+          kind: LimitRange
+          metadata:
+            name: tenant-limits
+            namespace: (( variables.ns ))
+            labels:
+              tenancy.io/tenant: (( variables.tenant ))
+              tenancy.io/managed-by: tenant-onboarding
+          spec:
+            limits:
+              - type: Container
+                default:
+                  cpu: 200m
+                  memory: 256Mi
+                defaultRequest:
+                  cpu: 100m
+                  memory: 128Mi
+                max:
+                  cpu: (( variables.tier.maxCpu ))
+                  memory: (( variables.tier.maxMemory ))
+          ---
+          apiVersion: networking.k8s.io/v1
+          kind: NetworkPolicy
+          metadata:
+            name: default-deny-all
+            namespace: (( variables.ns ))
+            labels:
+              tenancy.io/tenant: (( variables.tenant ))
+              tenancy.io/managed-by: tenant-onboarding
+          spec:
+            podSelector: {}
+            policyTypes: [Ingress, Egress]
+          ---
+          apiVersion: networking.k8s.io/v1
+          kind: NetworkPolicy
+          metadata:
+            name: allow-same-tenant
+            namespace: (( variables.ns ))
+            labels:
+              tenancy.io/tenant: (( variables.tenant ))
+              tenancy.io/managed-by: tenant-onboarding
+          spec:
+            podSelector: {}
+            policyTypes: [Ingress, Egress]
+            ingress:
+              - from:
+                  - namespaceSelector:
+                      matchLabels:
+                        tenancy.io/tenant: (( variables.tenant ))
+            egress:
+              - to:
+                  - namespaceSelector:
+                      matchLabels:
+                        tenancy.io/tenant: (( variables.tenant ))
+          ---
+          apiVersion: networking.k8s.io/v1
+          kind: NetworkPolicy
+          metadata:
+            name: allow-dns-egress
+            namespace: (( variables.ns ))
+            labels:
+              tenancy.io/tenant: (( variables.tenant ))
+              tenancy.io/managed-by: tenant-onboarding
+          spec:
+            podSelector: {}
+            policyTypes: [Egress]
+            egress:
+              - to:
+                  - namespaceSelector:
+                      matchLabels:
+                        kubernetes.io/metadata.name: kube-system
+                    podSelector:
+                      matchLabels:
+                        k8s-app: kube-dns
+                ports:
+                  - protocol: UDP
+                    port: 53
+                  - protocol: TCP
+                    port: 53

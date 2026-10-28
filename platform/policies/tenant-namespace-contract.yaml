@@ -1,0 +1,51 @@
+apiVersion: policies.kyverno.io/v1
+kind: ValidatingPolicy
+metadata:
+  name: tenant-namespace-contract
+  annotations:
+    policies.kyverno.io/title: Tenant Namespace Contract
+    policies.kyverno.io/category: Multi-Tenancy
+    policies.kyverno.io/severity: high
+    policies.kyverno.io/subject: Namespace
+    policies.kyverno.io/description: >-
+      A tenant namespace must carry a valid tenant name, a known tier and an
+      owner, must be named after its tenant (so team-a cannot claim a
+      namespace that looks like team-b's), and must enforce the restricted Pod
+      Security Standard.
+spec:
+  validationActions: [Deny]
+  evaluation:
+    background:
+      enabled: true
+  matchConstraints:
+    resourceRules:
+      - apiGroups: [""]
+        apiVersions: [v1]
+        operations: [CREATE, UPDATE]
+        resources: [namespaces]
+  matchConditions:
+    - name: is-tenant-namespace
+      expression: >-
+        has(object.metadata.labels) && 'tenancy.io/tenant' in object.metadata.labels
+  variables:
+    - name: labels
+      expression: object.metadata.labels
+    - name: tenant
+      expression: object.metadata.labels['tenancy.io/tenant']
+  validations:
+    - expression: >-
+        variables.tenant.matches('^[a-z][a-z0-9-]{1,28}[a-z0-9]$')
+      message: tenancy.io/tenant must be a lowercase DNS label of 3-30 characters
+    - expression: >-
+        object.metadata.name.startsWith(variables.tenant + '-')
+      messageExpression: >-
+        'tenant namespace ' + object.metadata.name + ' must be named ' + variables.tenant + '-<name>'
+    - expression: >-
+        variables.labels[?'tenancy.io/tier'].orValue('') in ['small', 'medium', 'large']
+      message: tenancy.io/tier must be one of small, medium, large
+    - expression: >-
+        variables.labels[?'tenancy.io/owner'].orValue('') != ''
+      message: tenancy.io/owner is required (the accountable team or person)
+    - expression: >-
+        variables.labels[?'pod-security.kubernetes.io/enforce'].orValue('') == 'restricted'
+      message: tenant namespaces must enforce the restricted Pod Security Standard

@@ -1,0 +1,26 @@
+# Allowed: tenant-high on the medium tier (5 high-priority pods).
+apiVersion: v1
+kind: Pod
+metadata:
+  name: conf-high-priority
+  namespace: team-a-frontend
+  labels:
+    app.kubernetes.io/name: conformance
+spec:
+  automountServiceAccountToken: false
+  terminationGracePeriodSeconds: 1
+  priorityClassName: tenant-high
+  securityContext:
+    runAsNonRoot: true
+    runAsUser: 65534
+    seccompProfile:
+      type: RuntimeDefault
+  containers:
+    - name: app
+      image: registry.k8s.io/e2e-test-images/agnhost:2.63.0@sha256:a62f40481e05709988fe44e5035b2e0f553cd52bf0ae4e83614928255b00e8c1
+      args: [netexec, --http-port=8080]
+      securityContext:
+        allowPrivilegeEscalation: false
+        readOnlyRootFilesystem: true
+        capabilities:
+          drop: [ALL]

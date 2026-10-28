@@ -1,0 +1,11 @@
+# kyverno/kyverno chart 3.9.2 (Kyverno v1.19.2). Single replicas: this is a
+# throwaway CI cluster. In production run 3 admission-controller replicas so a
+# rolling update never leaves the fail-closed webhooks without a backend.
+admissionController:
+  replicas: 1
+backgroundController:
+  replicas: 1
+cleanupController:
+  enabled: false
+reportsController:
+  enabled: false

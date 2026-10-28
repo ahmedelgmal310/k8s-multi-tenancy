@@ -1,0 +1,22 @@
+# Tenant priority classes. Which tenant may use which class is decided per
+# tier by the tenant-high-priority ResourceQuota (pods: 0 on the small tier),
+# and the restrict-priority-classes policy keeps tenants away from the
+# system-* classes. Neither class preempts running pods, so a tenant with a
+# higher class jumps the scheduling queue but cannot evict another tenant.
+apiVersion: scheduling.k8s.io/v1
+kind: PriorityClass
+metadata:
+  name: tenant-standard
+value: 1000
+globalDefault: false
+preemptionPolicy: Never
+description: Default class for tenant workloads.
+---
+apiVersion: scheduling.k8s.io/v1
+kind: PriorityClass
+metadata:
+  name: tenant-high
+value: 10000
+globalDefault: false
+preemptionPolicy: Never
+description: Latency-critical tenant workloads; available on medium and large tiers only.

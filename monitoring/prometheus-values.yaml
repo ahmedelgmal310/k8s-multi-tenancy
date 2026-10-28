@@ -1,0 +1,69 @@
+# prometheus-community/prometheus 29.35.0: one lean Prometheus server plus
+# kube-state-metrics (subchart 8.6.0, v2.20.0) for quota and namespace series,
+# and the kubelet's cAdvisor endpoint for per-tenant CPU usage. The rules from
+# monitoring/rules/tenant-rules.yaml are added by e2e/setup.sh.
+alertmanager:
+  enabled: false
+prometheus-node-exporter:
+  enabled: false
+prometheus-pushgateway:
+  enabled: false
+
+kube-state-metrics:
+  enabled: true
+  image:
+    registry: registry.k8s.io
+    repository: kube-state-metrics/kube-state-metrics
+    tag: v2.20.0
+    sha: sha256:42cfe3723a5f058171c627537fb57a3ea0f26e4380fa18555a95cb1a1b4cfc5b
+  collectors:
+    - namespaces
+    - pods
+    - resourcequotas
+    - limitranges
+    - deployments
+  # Expose the tenancy labels on kube_namespace_labels so every series can be
+  # joined to a tenant and tier.
+  metricLabelsAllowlist:
+    - namespaces=[tenancy.io/tenant,tenancy.io/tier,tenancy.io/owner]
+
+configmapReload:
+  prometheus:
+    enabled: false
+
+server:
+  image:
+    repository: quay.io/prometheus/prometheus
+    tag: v3.15.0
+    digest: sha256:efd719c99d83b060d9daefdcf00360461adf279f45ef5391f8d111892118753e
+  global:
+    scrape_interval: 10s
+    scrape_timeout: 5s
+    evaluation_interval: 10s
+  retention: 2h
+  persistentVolume:
+    enabled: false
+  resources:
+    requests:
+      cpu: 100m
+      memory: 256Mi
+    limits:
+      memory: 1Gi
+
+# Keep: kubernetes-service-endpoints (kube-state-metrics is annotated for it)
+# and kubernetes-nodes-cadvisor (container CPU per namespace).
+scrapeConfigs:
+  kubernetes-api-servers:
+    enabled: false
+  kubernetes-nodes:
+    enabled: false
+  kubernetes-service-endpoints-slow:
+    enabled: false
+  prometheus-pushgateway:
+    enabled: false
+  kubernetes-services:
+    enabled: false
+  kubernetes-pods:
+    enabled: false
+  kubernetes-pods-slow:
+    enabled: false

@@ -1,0 +1,148 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+    paths-ignore:
+      - "**.md"
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  KUBECONFORM_VERSION: v0.8.0
+  KUBECONFORM_SHA256: 9bc2bffbf71f261128533edaf912153948b7ff238f9a531ae6d34466ec287883
+  CRDS_CATALOG_REF: 3eb90d47aba8d61919d4419dd38301536e32a94b
+  KYVERNO_CHART_VERSION: "3.9.2"
+  PROMETHEUS_CHART_VERSION: "29.35.0"
+  HELM_VERSION: v4.3.1
+  GITLEAKS_IMAGE: ghcr.io/gitleaks/gitleaks:v8.30.1@sha256:c00b6bd0aeb3071cbcb79009cb16a60dd9e0a7c60e2be9ab65d25e6bc8abbb7f
+  ACTIONLINT_IMAGE: mirror.gcr.io/rhysd/actionlint:1.7.12@sha256:b1934ee5f1c509618f2508e6eb47ee0d3520686341fec936f3b79331f9315667
+  KYVERNO_CLI_IMAGE: ghcr.io/kyverno/kyverno-cli:v1.19.2@sha256:322ec5044d600930cb3af0e56dc33154a2d1d1fba58f4cadad3f47be7e78b11c
+  PROMETHEUS_IMAGE: quay.io/prometheus/prometheus:v3.15.0@sha256:efd719c99d83b060d9daefdcf00360461adf279f45ef5391f8d111892118753e
+
+jobs:
+  static:
+    name: gitleaks, shellcheck, actionlint
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: gitleaks (full history)
+        run: |
+          docker run --rm -v "$PWD:/repo:ro" \
+            -e GIT_CONFIG_COUNT=1 -e GIT_CONFIG_KEY_0=safe.directory -e GIT_CONFIG_VALUE_0='*' \
+            "$GITLEAKS_IMAGE" git --no-banner --redact --verbose /repo
+      - name: shellcheck
+        run: shellcheck --version && shellcheck -x e2e/*.sh
+      - name: actionlint
+        run: docker run --rm -v "$PWD:/repo:ro" -w /repo "$ACTIONLINT_IMAGE" -color
+
+  policies:
+    name: kubeconform, Kyverno CLI tests, promtool, dashboard
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Install kubeconform
+        run: |
+          curl -fsSLo /tmp/kubeconform.tgz \
+            "https://github.com/yannh/kubeconform/releases/download/${KUBECONFORM_VERSION}/kubeconform-linux-amd64.tar.gz"
+          echo "${KUBECONFORM_SHA256}  /tmp/kubeconform.tgz" | sha256sum -c -
+          sudo tar -xzf /tmp/kubeconform.tgz -C /usr/local/bin kubeconform
+      - name: kubeconform (Kubernetes + Kyverno CRD schemas)
+        run: |
+          kubeconform -strict -summary -output pretty \
+            -schema-location default \
+            -schema-location "https://raw.githubusercontent.com/datreeio/CRDs-catalog/${CRDS_CATALOG_REF}/{{.Group}}/{{.ResourceKind}}_{{.ResourceAPIVersion}}.json" \
+            -skip Test,Value \
+            tenants platform/rbac platform/scheduling platform/policies conformance/manifests e2e/fixtures
+      - name: Kyverno CLI policy tests
+        run: docker run --rm -v "$PWD:/repo:ro" -w /repo "$KYVERNO_CLI_IMAGE" test platform/policies/tests --remove-color --detailed-results
+      - name: promtool check + unit-test tenant rules
+        run: |
+          docker run --rm -v "$PWD/monitoring/rules:/rules:ro" -w /rules --entrypoint promtool "$PROMETHEUS_IMAGE" check rules tenant-rules.yaml
+          docker run --rm -v "$PWD/monitoring/rules:/rules:ro" -w /rules --entrypoint promtool "$PROMETHEUS_IMAGE" test rules tenant-rules_test.yaml
+      - name: Dashboard only uses recorded series
+        run: |
+          jq -e '.uid and .title and (.panels | length > 0) and all(.panels[]; (.targets | length > 0) and all(.targets[]; .expr != ""))' \
+            monitoring/dashboards/tenant-usage.json >/dev/null
+          # Every recording-rule name a panel references must be defined in the rules file.
+          jq -r '.panels[].targets[].expr' monitoring/dashboards/tenant-usage.json |
+            grep -oE '[a-z_]+:[a-z_:]+' | sort -u | while read -r rule; do
+              grep -q "record: ${rule}\$" monitoring/rules/tenant-rules.yaml || { echo "undefined rule ${rule}"; exit 1; }
+              echo "ok ${rule}"
+            done
+
+  e2e:
+    name: E2E on kind (conformance matrix, fair share, runbook)
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    needs: [static, policies]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: helm/kind-action@1544676c07bb3570fcb70166beaa07c4528fd4aa # v1.15.1
+        with:
+          version: v0.33.0
+          node_image: kindest/node:v1.36.4@sha256:099e049362a1526b2db71494e1947aae99bd16290d7c895f2b7ea312e3cbfaed
+          kubectl_version: v1.36.4
+          cluster_name: tenancy
+          wait: 120s
+      - uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310 # v5.0.1
+        with:
+          version: ${{ env.HELM_VERSION }}
+      - name: Install Kyverno, tenancy policies, Prometheus
+        run: ./e2e/setup.sh
+      - name: Onboard tenants (tenants/*.yaml)
+        run: ./e2e/onboard.sh
+      - name: Create per-run test identities (client certificates)
+        run: ./e2e/identities.sh
+      - name: Tenants deploy their own workloads
+        run: ./e2e/workloads.sh
+      - name: Tenancy conformance matrix
+        run: ./e2e/conformance.sh
+      - name: Fair share (noisy neighbour) and per-tenant metrics
+        run: ./e2e/fairshare.sh
+      - name: Runbook (onboard, drift repair, raise quota, offboard)
+        run: ./e2e/runbook.sh
+      - name: Results summary
+        if: always()
+        run: ./e2e/report.sh
+      - name: Diagnostics
+        if: failure()
+        run: |
+          kubectl get pods -A -o wide || true
+          kubectl get events -A --sort-by=.lastTimestamp | tail -80 || true
+          kubectl get validatingpolicies,generatingpolicies -o wide || true
+          kubectl get updaterequests -A || true
+          kubectl -n kyverno logs -l app.kubernetes.io/component=admission-controller --tail=80 || true
+          kubectl -n kyverno logs -l app.kubernetes.io/component=background-controller --tail=120 || true
+          for ns in team-a-frontend team-a-backend team-b-apps; do
+            kubectl get rolebindings,resourcequotas,limitranges,networkpolicies -n "$ns" || true
+          done
+      - name: Remove test identities
+        if: always()
+        run: rm -rf "${RUNNER_TEMP}/tenancy-identities"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: always()
+        with:
+          name: e2e-results
+          path: |
+            e2e-results/
+            !e2e-results/last-body.txt
+            !e2e-results/.*.json
+          retention-days: 90
+          if-no-files-found: ignore

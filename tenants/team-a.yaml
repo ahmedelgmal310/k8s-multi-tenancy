@@ -1,0 +1,28 @@
+# Tenant team-a: two namespaces, "medium" tier.
+#
+# This file is the whole onboarding request. When a namespace with the
+# tenancy.io/tenant label is created, the tenant-onboarding GeneratingPolicy
+# (platform/policies/tenant-onboarding.yaml) creates its RoleBindings, quotas,
+# LimitRange and NetworkPolicies. The tenant-namespace-contract policy rejects
+# the namespace if a label is missing or wrong.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: team-a-frontend
+  labels:
+    tenancy.io/tenant: team-a
+    tenancy.io/tier: medium
+    tenancy.io/owner: team-a-leads
+    pod-security.kubernetes.io/enforce: restricted
+    pod-security.kubernetes.io/enforce-version: latest
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: team-a-backend
+  labels:
+    tenancy.io/tenant: team-a
+    tenancy.io/tier: medium
+    tenancy.io/owner: team-a-leads
+    pod-security.kubernetes.io/enforce: restricted
+    pod-security.kubernetes.io/enforce-version: latest

@@ -1,0 +1,170 @@
+# Expected output of tenant-onboarding for the small-tier namespace team-b-apps.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: tenant-admins
+  namespace: team-b-apps
+  labels:
+    tenancy.io/tenant: team-b
+    tenancy.io/managed-by: tenant-onboarding
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: tenant-admin
+subjects:
+  - apiGroup: rbac.authorization.k8s.io
+    kind: Group
+    name: team-b:admins
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: tenant-developers
+  namespace: team-b-apps
+  labels:
+    tenancy.io/tenant: team-b
+    tenancy.io/managed-by: tenant-onboarding
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: tenant-developer
+subjects:
+  - apiGroup: rbac.authorization.k8s.io
+    kind: Group
+    name: team-b:developers
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: tenant-viewers
+  namespace: team-b-apps
+  labels:
+    tenancy.io/tenant: team-b
+    tenancy.io/managed-by: tenant-onboarding
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: tenant-viewer
+subjects:
+  - apiGroup: rbac.authorization.k8s.io
+    kind: Group
+    name: team-b:viewers
+---
+apiVersion: v1
+kind: ResourceQuota
+metadata:
+  name: tenant-quota
+  namespace: team-b-apps
+  labels:
+    tenancy.io/tenant: team-b
+    tenancy.io/tier: small
+    tenancy.io/managed-by: tenant-onboarding
+spec:
+  hard:
+    requests.cpu: "1"
+    requests.memory: 1Gi
+    limits.cpu: "2"
+    limits.memory: 2Gi
+    pods: "10"
+    services: "5"
+    persistentvolumeclaims: "2"
+    services.loadbalancers: "0"
+    services.nodeports: "0"
+---
+apiVersion: v1
+kind: ResourceQuota
+metadata:
+  name: tenant-high-priority
+  namespace: team-b-apps
+  labels:
+    tenancy.io/tenant: team-b
+    tenancy.io/tier: small
+    tenancy.io/managed-by: tenant-onboarding
+spec:
+  hard:
+    pods: "0"
+  scopeSelector:
+    matchExpressions:
+      - scopeName: PriorityClass
+        operator: In
+        values: [tenant-high]
+---
+apiVersion: v1
+kind: LimitRange
+metadata:
+  name: tenant-limits
+  namespace: team-b-apps
+  labels:
+    tenancy.io/tenant: team-b
+    tenancy.io/managed-by: tenant-onboarding
+spec:
+  limits:
+    - type: Container
+      default:
+        cpu: 200m
+        memory: 256Mi
+      defaultRequest:
+        cpu: 100m
+        memory: 128Mi
+      max:
+        cpu: "1"
+        memory: 1Gi
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: default-deny-all
+  namespace: team-b-apps
+  labels:
+    tenancy.io/tenant: team-b
+    tenancy.io/managed-by: tenant-onboarding
+spec:
+  podSelector: {}
+  policyTypes: [Ingress, Egress]
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-same-tenant
+  namespace: team-b-apps
+  labels:
+    tenancy.io/tenant: team-b
+    tenancy.io/managed-by: tenant-onboarding
+spec:
+  podSelector: {}
+  policyTypes: [Ingress, Egress]
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              tenancy.io/tenant: team-b
+  egress:
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              tenancy.io/tenant: team-b
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-dns-egress
+  namespace: team-b-apps
+  labels:
+    tenancy.io/tenant: team-b
+    tenancy.io/managed-by: tenant-onboarding
+spec:
+  podSelector: {}
+  policyTypes: [Egress]
+  egress:
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+          podSelector:
+            matchLabels:
+              k8s-app: kube-dns
+      ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53

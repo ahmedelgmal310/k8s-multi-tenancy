@@ -1,0 +1,27 @@
+# Namespace labels for the offline tests: namespaceSelector matching and the
+# namespaceObject seen by restrict-tenant-rolebindings.
+apiVersion: cli.kyverno.io/v1alpha1
+kind: Value
+metadata:
+  name: values
+namespaceSelector:
+  - name: team-a-frontend
+    labels:
+      tenancy.io/tenant: team-a
+      tenancy.io/tier: medium
+  - name: platform-tools
+    labels: {}
+namespaces:
+  - apiVersion: v1
+    kind: Namespace
+    metadata:
+      name: team-a-frontend
+      labels:
+        tenancy.io/tenant: team-a
+        tenancy.io/tier: medium
+        tenancy.io/owner: team-a-leads
+        pod-security.kubernetes.io/enforce: restricted
+  - apiVersion: v1
+    kind: Namespace
+    metadata:
+      name: platform-tools

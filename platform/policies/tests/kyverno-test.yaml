@@ -1,0 +1,136 @@
+# Offline unit tests for every policy: `kyverno test platform/policies/tests`.
+# Each case names a resource from resources.yaml and the expected verdict.
+apiVersion: cli.kyverno.io/v1alpha1
+kind: Test
+metadata:
+  name: tenancy-policies
+policies:
+  - ../tenant-onboarding.yaml
+  - ../tenant-namespace-contract.yaml
+  - ../workload-guardrails.yaml
+resources:
+  - namespaces.yaml
+  - resources.yaml
+variables: values.yaml
+results:
+  # --- onboarding: the full object set for a small-tier namespace
+  - isGeneratingPolicy: true
+    policy: tenant-onboarding
+    kind: Namespace
+    resources: [team-b-apps]
+    generatedResource: expected-team-b-apps.yaml
+    result: pass
+
+  # --- namespace contract
+  - isValidatingPolicy: true
+    policy: tenant-namespace-contract
+    kind: Namespace
+    resources: [team-b-apps, team-a-frontend]
+    result: pass
+  - isValidatingPolicy: true
+    policy: tenant-namespace-contract
+    kind: Namespace
+    resources: [team-x-unknown-tier, team-x-no-owner, team-x-privileged-pss, team-b-impostor]
+    result: fail
+  - isValidatingPolicy: true
+    policy: tenant-namespace-contract
+    kind: Namespace
+    resources: [platform-tools]
+    result: skip
+
+  # --- labels
+  - isValidatingPolicy: true
+    policy: require-workload-labels
+    kind: Pod
+    resources: [good-pod, curl-pod]
+    result: pass
+  - isValidatingPolicy: true
+    policy: require-workload-labels
+    kind: Pod
+    resources: [unlabeled-pod]
+    result: fail
+  - isValidatingPolicy: true
+    policy: require-workload-labels
+    kind: Deployment
+    resources: [good-deployment]
+    result: pass
+
+  # --- registries
+  - isValidatingPolicy: true
+    policy: restrict-image-registries
+    kind: Pod
+    resources: [good-pod, curl-pod, high-priority-pod]
+    result: pass
+  - isValidatingPolicy: true
+    policy: restrict-image-registries
+    kind: Pod
+    resources: [dockerhub-pod, implicit-registry-pod, lookalike-registry-pod]
+    result: fail
+  - isValidatingPolicy: true
+    policy: restrict-image-registries
+    kind: Pod
+    resources: [platform-pod]
+    result: skip
+  - isValidatingPolicy: true
+    policy: restrict-image-registries
+    kind: Deployment
+    resources: [dockerhub-deployment]
+    result: fail
+
+  # --- privileged / host access
+  - isValidatingPolicy: true
+    policy: disallow-privileged-and-host-access
+    kind: Pod
+    resources: [good-pod, curl-pod]
+    result: pass
+  - isValidatingPolicy: true
+    policy: disallow-privileged-and-host-access
+    kind: Pod
+    resources: [privileged-pod, hostpath-pod, hostnetwork-pod, hostport-pod]
+    result: fail
+  - isValidatingPolicy: true
+    policy: disallow-privileged-and-host-access
+    kind: Deployment
+    resources: [good-deployment]
+    result: pass
+  - isValidatingPolicy: true
+    policy: disallow-privileged-and-host-access
+    kind: Deployment
+    resources: [privileged-deployment]
+    result: fail
+
+  # --- priority classes
+  - isValidatingPolicy: true
+    policy: restrict-priority-classes
+    kind: Pod
+    resources: [good-pod, high-priority-pod]
+    result: pass
+  - isValidatingPolicy: true
+    policy: restrict-priority-classes
+    kind: Pod
+    resources: [system-priority-pod]
+    result: fail
+
+  # --- service types
+  - isValidatingPolicy: true
+    policy: restrict-service-types
+    kind: Service
+    resources: [svc-clusterip]
+    result: pass
+  - isValidatingPolicy: true
+    policy: restrict-service-types
+    kind: Service
+    resources: [svc-loadbalancer, svc-nodeport, svc-externalname, svc-externalip]
+    result: fail
+
+  # --- tenant RoleBindings
+  - isValidatingPolicy: true
+    policy: restrict-tenant-rolebindings
+    kind: RoleBinding
+    resources: [rb-own-group, rb-own-serviceaccount]
+    result: pass
+  - isValidatingPolicy: true
+    policy: restrict-tenant-rolebindings
+    kind: RoleBinding
+    resources: [rb-other-tenant-group, rb-cluster-admin, rb-builtin-edit, rb-foreign-serviceaccount, rb-user]
+    result: fail

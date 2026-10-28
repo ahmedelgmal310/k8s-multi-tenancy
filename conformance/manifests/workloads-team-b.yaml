@@ -1,0 +1,91 @@
+# team-b's applications, deployed by team-b's admin identity (bob).
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: echo
+  namespace: team-b-apps
+  labels:
+    app.kubernetes.io/name: echo
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: echo
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: echo
+    spec:
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65534
+        runAsGroup: 65534
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: echo
+          image: registry.k8s.io/e2e-test-images/agnhost:2.63.0@sha256:a62f40481e05709988fe44e5035b2e0f553cd52bf0ae4e83614928255b00e8c1
+          args: [netexec, --http-port=8080]
+          ports:
+            - name: http
+              containerPort: 8080
+          readinessProbe:
+            tcpSocket:
+              port: http
+            periodSeconds: 2
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: [ALL]
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: echo
+  namespace: team-b-apps
+  labels:
+    app.kubernetes.io/name: echo
+spec:
+  selector:
+    app.kubernetes.io/name: echo
+  ports:
+    - name: http
+      port: 8080
+      targetPort: http
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: client
+  namespace: team-b-apps
+  labels:
+    app.kubernetes.io/name: client
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: client
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: client
+    spec:
+      automountServiceAccountToken: false
+      terminationGracePeriodSeconds: 1
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65534
+        runAsGroup: 65534
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: client
+          image: docker.io/curlimages/curl:8.22.0@sha256:43366cd60f226c7655181a0f7e85c468a41d182fdd2dc2c1c3b872a2b9d05d7a
+          command: [sleep, "86400"]
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: [ALL]

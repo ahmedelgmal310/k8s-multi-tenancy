@@ -1,0 +1,136 @@
+{
+  "title": "Tenant usage",
+  "uid": "tenant-usage",
+  "description": "Per-tenant quota usage, pods, CPU and memory. Every query uses the recording rules in monitoring/rules/tenant-rules.yaml.",
+  "tags": ["multi-tenancy", "kubernetes", "quota"],
+  "schemaVersion": 39,
+  "version": 1,
+  "editable": true,
+  "graphTooltip": 1,
+  "time": { "from": "now-6h", "to": "now" },
+  "refresh": "30s",
+  "templating": {
+    "list": [
+      {
+        "name": "datasource",
+        "label": "Data source",
+        "type": "datasource",
+        "query": "prometheus",
+        "current": {}
+      },
+      {
+        "name": "tenant",
+        "label": "Tenant",
+        "type": "query",
+        "datasource": { "type": "prometheus", "uid": "${datasource}" },
+        "query": { "query": "label_values(namespace_tenant:info, tenant)", "refId": "tenant" },
+        "definition": "label_values(namespace_tenant:info, tenant)",
+        "includeAll": true,
+        "multi": true,
+        "allValue": ".+",
+        "refresh": 2,
+        "current": { "text": "All", "value": "$__all" }
+      }
+    ]
+  },
+  "panels": [
+    {
+      "id": 1,
+      "type": "bargauge",
+      "title": "Quota used (highest namespace per tenant and resource)",
+      "gridPos": { "h": 9, "w": 12, "x": 0, "y": 0 },
+      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "options": { "orientation": "horizontal", "displayMode": "gradient", "showUnfilled": true },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percentunit",
+          "min": 0,
+          "max": 1,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "orange", "value": 0.9 },
+              { "color": "red", "value": 1 }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "tenant_resource:quota_usage:max_ratio{tenant=~\"$tenant\"}",
+          "legendFormat": "{{tenant}} {{resource}}",
+          "instant": true
+        }
+      ]
+    },
+    {
+      "id": 2,
+      "type": "table",
+      "title": "Quota alerts (pending or firing)",
+      "gridPos": { "h": 9, "w": 12, "x": 12, "y": 0 },
+      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "ALERTS{alertname=~\"Tenant.*\", tenant=~\"$tenant\"}",
+          "format": "table",
+          "instant": true
+        }
+      ],
+      "fieldConfig": { "defaults": {}, "overrides": [] }
+    },
+    {
+      "id": 3,
+      "type": "timeseries",
+      "title": "Running and pending pods",
+      "gridPos": { "h": 8, "w": 8, "x": 0, "y": 9 },
+      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "fieldConfig": { "defaults": { "unit": "short", "min": 0 }, "overrides": [] },
+      "targets": [
+        { "refId": "A", "expr": "tenant:pods:count{tenant=~\"$tenant\"}", "legendFormat": "{{tenant}}" }
+      ]
+    },
+    {
+      "id": 4,
+      "type": "timeseries",
+      "title": "CPU: requested vs used (cores)",
+      "gridPos": { "h": 8, "w": 8, "x": 8, "y": 9 },
+      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "fieldConfig": { "defaults": { "unit": "short", "min": 0 }, "overrides": [] },
+      "targets": [
+        { "refId": "A", "expr": "tenant:cpu_requests:cores{tenant=~\"$tenant\"}", "legendFormat": "{{tenant}} requested" },
+        { "refId": "B", "expr": "tenant:cpu_usage:cores{tenant=~\"$tenant\"}", "legendFormat": "{{tenant}} used" }
+      ]
+    },
+    {
+      "id": 5,
+      "type": "timeseries",
+      "title": "Memory requested",
+      "gridPos": { "h": 8, "w": 8, "x": 16, "y": 9 },
+      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "fieldConfig": { "defaults": { "unit": "bytes", "min": 0 }, "overrides": [] },
+      "targets": [
+        { "refId": "A", "expr": "tenant:memory_requests:bytes{tenant=~\"$tenant\"}", "legendFormat": "{{tenant}}" }
+      ]
+    },
+    {
+      "id": 6,
+      "type": "table",
+      "title": "Tenant namespaces",
+      "gridPos": { "h": 7, "w": 24, "x": 0, "y": 17 },
+      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "fieldConfig": { "defaults": {}, "overrides": [] },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "namespace_tenant:info{tenant=~\"$tenant\"}",
+          "format": "table",
+          "instant": true
+        }
+      ]
+    }
+  ]
+}

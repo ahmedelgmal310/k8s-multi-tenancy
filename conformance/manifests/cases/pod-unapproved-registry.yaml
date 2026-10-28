@@ -1,0 +1,25 @@
+# Denied: image from a registry that is not on the approved list.
+apiVersion: v1
+kind: Pod
+metadata:
+  name: conf-dockerhub
+  namespace: team-a-frontend
+  labels:
+    app.kubernetes.io/name: conformance
+spec:
+  automountServiceAccountToken: false
+  terminationGracePeriodSeconds: 1
+  securityContext:
+    runAsNonRoot: true
+    runAsUser: 65534
+    seccompProfile:
+      type: RuntimeDefault
+  containers:
+    - name: app
+      image: docker.io/library/nginx:1.29
+      args: [netexec, --http-port=8080]
+      securityContext:
+        allowPrivilegeEscalation: false
+        readOnlyRootFilesystem: true
+        capabilities:
+          drop: [ALL]

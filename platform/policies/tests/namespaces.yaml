@@ -1,0 +1,65 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: team-b-apps
+  labels:
+    tenancy.io/tenant: team-b
+    tenancy.io/tier: small
+    tenancy.io/owner: team-b-leads
+    pod-security.kubernetes.io/enforce: restricted
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: team-a-frontend
+  labels:
+    tenancy.io/tenant: team-a
+    tenancy.io/tier: medium
+    tenancy.io/owner: team-a-leads
+    pod-security.kubernetes.io/enforce: restricted
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: team-x-unknown-tier
+  labels:
+    tenancy.io/tenant: team-x
+    tenancy.io/tier: unlimited
+    tenancy.io/owner: team-x-leads
+    pod-security.kubernetes.io/enforce: restricted
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: team-x-no-owner
+  labels:
+    tenancy.io/tenant: team-x
+    tenancy.io/tier: small
+    pod-security.kubernetes.io/enforce: restricted
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: team-x-privileged-pss
+  labels:
+    tenancy.io/tenant: team-x
+    tenancy.io/tier: small
+    tenancy.io/owner: team-x-leads
+    pod-security.kubernetes.io/enforce: privileged
+---
+# Claims tenant team-a but is named like a team-b namespace.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: team-b-impostor
+  labels:
+    tenancy.io/tenant: team-a
+    tenancy.io/tier: small
+    tenancy.io/owner: team-a-leads
+    pod-security.kubernetes.io/enforce: restricted
+---
+# Not a tenant namespace: no tenancy.io/tenant label, policies do not apply.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: platform-tools

@@ -1,0 +1,13 @@
+# Tenant team-b: one namespace, "small" tier. In the e2e run team-b plays the
+# noisy neighbour, and its tier is later raised to "medium" to exercise the
+# quota-raise runbook.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: team-b-apps
+  labels:
+    tenancy.io/tenant: team-b
+    tenancy.io/tier: small
+    tenancy.io/owner: team-b-leads
+    pod-security.kubernetes.io/enforce: restricted
+    pod-security.kubernetes.io/enforce-version: latest

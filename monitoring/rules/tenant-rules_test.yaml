@@ -1,0 +1,160 @@
+# promtool test rules monitoring/rules/tenant-rules_test.yaml
+rule_files:
+  - tenant-rules.yaml
+
+evaluation_interval: 1m
+
+tests:
+  # team-b (small tier) fills its pod quota: 0 -> 9/10 at 6m -> 10/10 at 27m.
+  # team-a stays at 3/30. team-c was onboarded but has no quota (generation
+  # failed). kube-system is not a tenant and must never show up.
+  - interval: 1m
+    input_series:
+      - series: 'kube_namespace_labels{namespace="team-a-frontend", label_tenancy_io_tenant="team-a", label_tenancy_io_tier="medium"}'
+        values: '1x45'
+      - series: 'kube_namespace_labels{namespace="team-b-apps", label_tenancy_io_tenant="team-b", label_tenancy_io_tier="small"}'
+        values: '1x45'
+      - series: 'kube_namespace_labels{namespace="team-c-apps", label_tenancy_io_tenant="team-c", label_tenancy_io_tier="small"}'
+        values: '1x45'
+      - series: 'kube_namespace_labels{namespace="kube-system"}'
+        values: '1x45'
+      - series: 'kube_resourcequota{namespace="team-b-apps", resourcequota="tenant-quota", resource="pods", type="hard"}'
+        values: '10x45'
+      - series: 'kube_resourcequota{namespace="team-b-apps", resourcequota="tenant-quota", resource="pods", type="used"}'
+        values: '0x5 9x20 10x19'
+      # A hard limit of 0 must not produce a division by zero or an alert.
+      - series: 'kube_resourcequota{namespace="team-b-apps", resourcequota="tenant-quota", resource="services.loadbalancers", type="hard"}'
+        values: '0x45'
+      - series: 'kube_resourcequota{namespace="team-b-apps", resourcequota="tenant-quota", resource="services.loadbalancers", type="used"}'
+        values: '0x45'
+      - series: 'kube_resourcequota{namespace="team-a-frontend", resourcequota="tenant-quota", resource="pods", type="hard"}'
+        values: '30x45'
+      - series: 'kube_resourcequota{namespace="team-a-frontend", resourcequota="tenant-quota", resource="pods", type="used"}'
+        values: '3x45'
+      # The priority quota is not the tenant quota and is ignored by the ratio.
+      - series: 'kube_resourcequota{namespace="team-b-apps", resourcequota="tenant-high-priority", resource="pods", type="hard"}'
+        values: '0x45'
+    promql_expr_test:
+      - expr: namespace_tenant:info
+        eval_time: 1m
+        exp_samples:
+          - labels: 'namespace_tenant:info{namespace="team-a-frontend", tenant="team-a", tier="medium"}'
+            value: 1
+          - labels: 'namespace_tenant:info{namespace="team-b-apps", tenant="team-b", tier="small"}'
+            value: 1
+          - labels: 'namespace_tenant:info{namespace="team-c-apps", tenant="team-c", tier="small"}'
+            value: 1
+      - expr: tenant_namespace_resource:quota_usage:ratio
+        eval_time: 10m
+        exp_samples:
+          - labels: 'tenant_namespace_resource:quota_usage:ratio{namespace="team-a-frontend", resource="pods", tenant="team-a", tier="medium"}'
+            value: 0.1
+          - labels: 'tenant_namespace_resource:quota_usage:ratio{namespace="team-b-apps", resource="pods", tenant="team-b", tier="small"}'
+            value: 0.9
+      - expr: tenant_resource:quota_usage:max_ratio{tenant="team-b"}
+        eval_time: 30m
+        exp_samples:
+          - labels: 'tenant_resource:quota_usage:max_ratio{resource="pods", tenant="team-b"}'
+            value: 1
+    alert_rule_test:
+      # 0.9 for 4 minutes: pending, not firing.
+      - eval_time: 10m
+        alertname: TenantQuotaNearLimit
+        exp_alerts: []
+      - eval_time: 25m
+        alertname: TenantQuotaNearLimit
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              tenant: team-b
+              tier: small
+              namespace: team-b-apps
+              resource: pods
+            exp_annotations:
+              summary: "team-b is at 90% of its pods quota in team-b-apps"
+              description: "New workloads will soon be rejected with exceeded quota. Trim usage or move the team to a larger tier."
+              runbook_url: "https://github.com/ahmedelgmal310/k8s-multi-tenancy#raise-a-teams-quota"
+      - eval_time: 25m
+        alertname: TenantQuotaExhausted
+        exp_alerts: []
+      - eval_time: 40m
+        alertname: TenantQuotaExhausted
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              tenant: team-b
+              tier: small
+              namespace: team-b-apps
+              resource: pods
+            exp_annotations:
+              summary: "team-b has used all of its pods quota in team-b-apps"
+              description: "Every create that needs more pods is rejected; Deployments show FailedCreate on their ReplicaSets."
+              runbook_url: "https://github.com/ahmedelgmal310/k8s-multi-tenancy#raise-a-teams-quota"
+      - eval_time: 5m
+        alertname: TenantNamespaceUnguarded
+        exp_alerts: []
+      - eval_time: 12m
+        alertname: TenantNamespaceUnguarded
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              tenant: team-c
+              tier: small
+              namespace: team-c-apps
+            exp_annotations:
+              summary: "Tenant namespace team-c-apps (team-c) has no tenant quota"
+              description: "tenant-onboarding did not generate the tenant objects, or they were deleted. Check kubectl -n kyverno get updaterequests and the background controller logs."
+              runbook_url: "https://github.com/ahmedelgmal310/k8s-multi-tenancy#onboarding-did-not-complete"
+
+  # Per-tenant usage roll-ups from pods and cAdvisor (30s scrape interval).
+  - interval: 30s
+    input_series:
+      - series: 'kube_namespace_labels{namespace="team-a-frontend", label_tenancy_io_tenant="team-a", label_tenancy_io_tier="medium"}'
+        values: '1x20'
+      - series: 'kube_namespace_labels{namespace="team-a-backend", label_tenancy_io_tenant="team-a", label_tenancy_io_tier="medium"}'
+        values: '1x20'
+      - series: 'kube_pod_status_phase{namespace="team-a-frontend", pod="web-1", phase="Running"}'
+        values: '1x20'
+      - series: 'kube_pod_status_phase{namespace="team-a-backend", pod="api-1", phase="Running"}'
+        values: '1x20'
+      - series: 'kube_pod_status_phase{namespace="team-a-backend", pod="api-2", phase="Pending"}'
+        values: '1x20'
+      - series: 'kube_pod_status_phase{namespace="team-a-backend", pod="job-1", phase="Succeeded"}'
+        values: '1x20'
+      - series: 'kube_pod_status_phase{namespace="team-a-backend", pod="job-1", phase="Running"}'
+        values: '0x20'
+      - series: 'kube_pod_container_resource_requests{namespace="team-a-frontend", pod="web-1", container="web", resource="cpu", unit="core"}'
+        values: '0.25x20'
+      - series: 'kube_pod_container_resource_requests{namespace="team-a-backend", pod="api-1", container="api", resource="cpu", unit="core"}'
+        values: '0.5x20'
+      - series: 'kube_pod_container_resource_requests{namespace="team-a-backend", pod="api-1", container="api", resource="memory", unit="byte"}'
+        values: '134217728x20'
+      # 0.3 CPU seconds per second (9 s per 30 s scrape) in team-a-backend.
+      - series: 'container_cpu_usage_seconds_total{namespace="team-a-backend", pod="api-1", container="api"}'
+        values: '0+9x20'
+      # Pod sandbox ("POD") and pod-level (container="") series are not double counted.
+      - series: 'container_cpu_usage_seconds_total{namespace="team-a-backend", pod="api-1", container=""}'
+        values: '0+9x20'
+      - series: 'container_cpu_usage_seconds_total{namespace="kube-system", pod="etcd", container="etcd"}'
+        values: '0+30x20'
+    promql_expr_test:
+      - expr: tenant:pods:count
+        eval_time: 5m
+        exp_samples:
+          - labels: 'tenant:pods:count{tenant="team-a"}'
+            value: 3
+      - expr: tenant:cpu_requests:cores
+        eval_time: 5m
+        exp_samples:
+          - labels: 'tenant:cpu_requests:cores{tenant="team-a"}'
+            value: 0.75
+      - expr: tenant:memory_requests:bytes
+        eval_time: 5m
+        exp_samples:
+          - labels: 'tenant:memory_requests:bytes{tenant="team-a"}'
+            value: 134217728
+      - expr: tenant:cpu_usage:cores
+        eval_time: 5m
+        exp_samples:
+          - labels: 'tenant:cpu_usage:cores{tenant="team-a"}'
+            value: 0.3

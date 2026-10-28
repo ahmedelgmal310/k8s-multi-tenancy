@@ -1,0 +1,19 @@
+# e2e output
+e2e-results/
+
+# never commit test identities (created per CI run by e2e/identities.sh)
+*.key
+*.crt
+*.csr
+*.pem
+*.kubeconfig
+kubeconfig
+
+# editors / OS
+.idea/
+.vscode/
+.DS_Store
+
+# local tooling state
+.omc/
+.impeccable/

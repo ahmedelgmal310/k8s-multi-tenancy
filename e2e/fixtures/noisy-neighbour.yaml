@@ -1,0 +1,45 @@
+# The noisy neighbour: team-b's developer asks for 40 CPU-burning replicas
+# (40 x 200m = 8 CPU of limits, twice the size of the CI node). The small
+# tier's quota (10 pods, 1 CPU requests, 2 CPU limits) decides how many of
+# them actually exist.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: noisy
+  namespace: team-b-apps
+  labels:
+    app.kubernetes.io/name: noisy
+spec:
+  replicas: 40
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: noisy
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: noisy
+    spec:
+      automountServiceAccountToken: false
+      terminationGracePeriodSeconds: 1
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65534
+        runAsGroup: 65534
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: burn
+          image: registry.k8s.io/e2e-test-images/busybox:1.37.0-1@sha256:0ffbe172f8d245c83f285c6992b452c53d085661e03ddfd3b484332026e6c8bb
+          command: [sh, -c, "while :; do :; done"]
+          resources:
+            requests:
+              cpu: 100m
+              memory: 32Mi
+            limits:
+              cpu: 200m
+              memory: 64Mi
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: [ALL]

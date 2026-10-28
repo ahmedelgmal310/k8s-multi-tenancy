@@ -1,0 +1,94 @@
+groups:
+  # Per-tenant usage, built from kube-state-metrics (quota, requests, pods) and
+  # cAdvisor (CPU actually used). Every series carries a tenant label taken
+  # from the namespace's tenancy.io/tenant label.
+  - name: tenant-usage
+    rules:
+      - record: namespace_tenant:info
+        expr: |
+          max by (namespace, tenant, tier) (
+            label_replace(
+              label_replace(kube_namespace_labels{label_tenancy_io_tenant!=""},
+                "tenant", "$1", "label_tenancy_io_tenant", "(.+)"),
+              "tier", "$1", "label_tenancy_io_tier", "(.*)")
+          )
+
+      # used / hard for every resource in the tenant quota (0-1). Resources
+      # with a hard limit of 0 (e.g. services.loadbalancers) are left out.
+      - record: tenant_namespace_resource:quota_usage:ratio
+        expr: |
+          (
+              max by (namespace, resource) (kube_resourcequota{resourcequota="tenant-quota", type="used"})
+            / on (namespace, resource)
+              (max by (namespace, resource) (kube_resourcequota{resourcequota="tenant-quota", type="hard"}) > 0)
+          )
+          * on (namespace) group_left (tenant, tier) namespace_tenant:info
+
+      - record: tenant_resource:quota_usage:max_ratio
+        expr: max by (tenant, resource) (tenant_namespace_resource:quota_usage:ratio)
+
+      - record: tenant:pods:count
+        expr: |
+          sum by (tenant) (
+            (kube_pod_status_phase{phase=~"Pending|Running"} == 1)
+            * on (namespace) group_left (tenant) namespace_tenant:info
+          )
+
+      - record: tenant:cpu_requests:cores
+        expr: |
+          sum by (tenant) (
+            kube_pod_container_resource_requests{resource="cpu"}
+            * on (namespace) group_left (tenant) namespace_tenant:info
+          )
+
+      - record: tenant:memory_requests:bytes
+        expr: |
+          sum by (tenant) (
+            kube_pod_container_resource_requests{resource="memory"}
+            * on (namespace) group_left (tenant) namespace_tenant:info
+          )
+
+      - record: tenant:cpu_usage:cores
+        expr: |
+          sum by (tenant) (
+            rate(container_cpu_usage_seconds_total{container!="", container!="POD"}[1m])
+            * on (namespace) group_left (tenant) namespace_tenant:info
+          )
+
+  - name: tenant-alerts
+    rules:
+      - alert: TenantQuotaNearLimit
+        expr: tenant_namespace_resource:quota_usage:ratio >= 0.9
+        for: 15m
+        labels:
+          severity: warning
+        annotations:
+          summary: "{{ $labels.tenant }} is at {{ $value | humanizePercentage }} of its {{ $labels.resource }} quota in {{ $labels.namespace }}"
+          description: "New workloads will soon be rejected with exceeded quota. Trim usage or move the team to a larger tier."
+          runbook_url: "https://github.com/ahmedelgmal310/k8s-multi-tenancy#raise-a-teams-quota"
+
+      - alert: TenantQuotaExhausted
+        expr: tenant_namespace_resource:quota_usage:ratio >= 1
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "{{ $labels.tenant }} has used all of its {{ $labels.resource }} quota in {{ $labels.namespace }}"
+          description: "Every create that needs more {{ $labels.resource }} is rejected; Deployments show FailedCreate on their ReplicaSets."
+          runbook_url: "https://github.com/ahmedelgmal310/k8s-multi-tenancy#raise-a-teams-quota"
+
+      # Onboarding is asynchronous (Kyverno background controller). A tenant
+      # namespace that still has no tenant quota after 10 minutes means
+      # generation failed and the namespace is running without guardrails.
+      - alert: TenantNamespaceUnguarded
+        expr: |
+          namespace_tenant:info
+          unless on (namespace)
+          kube_resourcequota{resourcequota="tenant-quota", type="hard"}
+        for: 10m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Tenant namespace {{ $labels.namespace }} ({{ $labels.tenant }}) has no tenant quota"
+          description: "tenant-onboarding did not generate the tenant objects, or they were deleted. Check kubectl -n kyverno get updaterequests and the background controller logs."
+          runbook_url: "https://github.com/ahmedelgmal310/k8s-multi-tenancy#onboarding-did-not-complete"

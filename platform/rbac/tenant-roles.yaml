@@ -1,0 +1,156 @@
+# The three tenant roles. They are ClusterRoles only so they can be defined
+# once; tenants only ever receive them through RoleBindings in their own
+# namespaces (created by tenant-onboarding), so every rule below is
+# namespace-scoped in effect. No tenant role touches ResourceQuota, LimitRange,
+# NetworkPolicy, Namespace or any cluster-scoped resource with a write verb.
+#
+#   tenant-viewer     read workloads and their status; no Secrets
+#   tenant-developer  viewer + deploy and operate workloads; no Secrets, no RBAC
+#   tenant-admin      developer + Secrets, ServiceAccounts, exec/port-forward,
+#                     RoleBindings (to tenant roles, own tenant only: enforced by
+#                     the restrict-tenant-rolebindings policy and by RBAC
+#                     escalation prevention)
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: tenant-viewer
+  labels:
+    tenancy.io/role: viewer
+rules:
+  - apiGroups: [""]
+    resources:
+      - pods
+      - pods/log
+      - services
+      - endpoints
+      - configmaps
+      - persistentvolumeclaims
+      - serviceaccounts
+      - events
+      - resourcequotas
+      - limitranges
+    verbs: [get, list, watch]
+  - apiGroups: [apps]
+    resources: [deployments, replicasets, statefulsets]
+    verbs: [get, list, watch]
+  - apiGroups: [batch]
+    resources: [jobs, cronjobs]
+    verbs: [get, list, watch]
+  - apiGroups: [autoscaling]
+    resources: [horizontalpodautoscalers]
+    verbs: [get, list, watch]
+  - apiGroups: [policy]
+    resources: [poddisruptionbudgets]
+    verbs: [get, list, watch]
+  - apiGroups: [networking.k8s.io]
+    resources: [networkpolicies]
+    verbs: [get, list, watch]
+  - apiGroups: [discovery.k8s.io]
+    resources: [endpointslices]
+    verbs: [get, list, watch]
+  - apiGroups: [events.k8s.io]
+    resources: [events]
+    verbs: [get, list, watch]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: tenant-developer
+  labels:
+    tenancy.io/role: developer
+rules:
+  - apiGroups: [""]
+    resources:
+      - pods
+      - pods/log
+      - services
+      - endpoints
+      - configmaps
+      - persistentvolumeclaims
+      - serviceaccounts
+      - events
+      - resourcequotas
+      - limitranges
+    verbs: [get, list, watch]
+  - apiGroups: [""]
+    resources: [pods, services, configmaps, persistentvolumeclaims]
+    verbs: [create, update, patch, delete, deletecollection]
+  - apiGroups: [apps]
+    resources: [deployments, replicasets, statefulsets]
+    verbs: [get, list, watch]
+  - apiGroups: [apps]
+    resources: [deployments, deployments/scale, statefulsets, statefulsets/scale]
+    verbs: [create, update, patch, delete]
+  - apiGroups: [batch]
+    resources: [jobs, cronjobs]
+    verbs: [get, list, watch, create, update, patch, delete]
+  - apiGroups: [autoscaling]
+    resources: [horizontalpodautoscalers]
+    verbs: [get, list, watch, create, update, patch, delete]
+  - apiGroups: [policy]
+    resources: [poddisruptionbudgets]
+    verbs: [get, list, watch, create, update, patch, delete]
+  - apiGroups: [networking.k8s.io]
+    resources: [networkpolicies]
+    verbs: [get, list, watch]
+  - apiGroups: [discovery.k8s.io]
+    resources: [endpointslices]
+    verbs: [get, list, watch]
+  - apiGroups: [events.k8s.io]
+    resources: [events]
+    verbs: [get, list, watch]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: tenant-admin
+  labels:
+    tenancy.io/role: admin
+rules:
+  - apiGroups: [""]
+    resources:
+      - pods
+      - pods/log
+      - services
+      - endpoints
+      - configmaps
+      - persistentvolumeclaims
+      - serviceaccounts
+      - secrets
+      - events
+      - resourcequotas
+      - limitranges
+    verbs: [get, list, watch]
+  - apiGroups: [""]
+    resources: [pods, services, configmaps, persistentvolumeclaims, serviceaccounts, secrets]
+    verbs: [create, update, patch, delete, deletecollection]
+  - apiGroups: [""]
+    resources: [pods/exec, pods/portforward]
+    verbs: [create, get]
+  - apiGroups: [apps]
+    resources: [deployments, replicasets, statefulsets]
+    verbs: [get, list, watch]
+  - apiGroups: [apps]
+    resources: [deployments, deployments/scale, statefulsets, statefulsets/scale]
+    verbs: [create, update, patch, delete]
+  - apiGroups: [batch]
+    resources: [jobs, cronjobs]
+    verbs: [get, list, watch, create, update, patch, delete]
+  - apiGroups: [autoscaling]
+    resources: [horizontalpodautoscalers]
+    verbs: [get, list, watch, create, update, patch, delete]
+  - apiGroups: [policy]
+    resources: [poddisruptionbudgets]
+    verbs: [get, list, watch, create, update, patch, delete]
+  - apiGroups: [networking.k8s.io]
+    resources: [networkpolicies]
+    verbs: [get, list, watch]
+  - apiGroups: [discovery.k8s.io]
+    resources: [endpointslices]
+    verbs: [get, list, watch]
+  - apiGroups: [events.k8s.io]
+    resources: [events]
+    verbs: [get, list, watch]
+  - apiGroups: [rbac.authorization.k8s.io]
+    resources: [rolebindings]
+    verbs: [get, list, watch, create, update, patch, delete]

@@ -1,0 +1,12 @@
+# A third tenant, used only by e2e/runbook.sh to time onboarding and
+# offboarding of a new team on a running cluster.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: team-c-apps
+  labels:
+    tenancy.io/tenant: team-c
+    tenancy.io/tier: small
+    tenancy.io/owner: team-c-leads
+    pod-security.kubernetes.io/enforce: restricted
+    pod-security.kubernetes.io/enforce-version: latest

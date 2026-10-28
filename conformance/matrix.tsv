@@ -1,0 +1,81 @@
+# Tenancy conformance matrix. One row per check, run by e2e/conformance.sh as
+# the named identity with plain kubectl or curl. The job fails if any observed
+# result differs from the expected one.
+#
+# identity  a-admin / a-dev / a-viewer / b-admin / b-dev / b-viewer: per-run
+#           client certificates (e2e/identities.sh); platform: cluster-admin
+# method    kubectl  target is the kubectl argument list
+#           api      target is "<VERB> <path>", sent with curl and the identity's
+#                    client certificate straight to the API server
+#           http     target is "<ns>/<deployment> <url>": curl runs inside that
+#                    pod (kubectl exec as the identity)
+# expect    allowed, or denied:<layer> where layer is the component that must
+#           reject it: rbac, policy (Kyverno), pss (Pod Security admission),
+#           quota (ResourceQuota), limitrange (LimitRange max), netpol
+# check     for allowed rows: "<ns>|<object>|<jsonpath>|<expected value>" read
+#           back as platform after the action, or "-"
+#
+# id	identity	method	target	expect	check	description
+own-admin-list-pods	a-admin	kubectl	get pods -n team-a-backend	allowed	-	team-a admin lists pods in its own namespace
+own-admin-create-secret	a-admin	kubectl	create secret generic conf-a-secret -n team-a-backend --from-literal=token=not-a-real-secret	allowed	-	team-a admin creates a Secret in its own namespace
+own-admin-read-secrets-api	a-admin	api	GET /api/v1/namespaces/team-a-backend/secrets	allowed	-	team-a admin reads Secrets in its own namespace (curl, raw API)
+own-admin-grant-viewer	a-admin	kubectl	create rolebinding conf-extra-viewers -n team-a-frontend --clusterrole=tenant-viewer --group=team-a:viewers	allowed	-	team-a admin grants tenant-viewer to its own viewers group
+own-admin-exec	a-admin	kubectl	exec -n team-a-frontend deploy/client -- true	allowed	-	team-a admin execs into its own pod
+own-other-ns-same-tenant	a-admin	kubectl	get deployments -n team-a-frontend	allowed	-	team-a admin works in its second namespace (one identity, all tenant namespaces)
+own-dev-deploy	a-dev	kubectl	apply -f conformance/manifests/cases/dev-deployment.yaml	allowed	-	team-a developer creates a compliant Deployment
+own-dev-configmap	a-dev	kubectl	create configmap conf-dev-config -n team-a-frontend --from-literal=mode=test	allowed	-	team-a developer creates a ConfigMap
+own-dev-logs	a-dev	kubectl	logs -n team-a-backend deploy/echo --tail=1	allowed	-	team-a developer reads pod logs
+own-dev-scale	a-dev	kubectl	scale -n team-a-backend deploy/echo --replicas=1	allowed	-	team-a developer scales a Deployment
+own-dev-read-quota	a-dev	kubectl	get resourcequota tenant-quota -n team-a-frontend	allowed	-	team-a developer can see its quota and usage
+own-viewer-list-deploys	a-viewer	kubectl	get deployments -n team-a-backend	allowed	-	team-a viewer lists Deployments
+own-viewer-list-pods-api	a-viewer	api	GET /api/v1/namespaces/team-a-frontend/pods	allowed	-	team-a viewer lists pods (curl, raw API)
+own-b-admin-list-pods	b-admin	kubectl	get pods -n team-b-apps	allowed	-	team-b admin lists pods in its own namespace
+role-viewer-create-cm	a-viewer	kubectl	create configmap conf-viewer-config -n team-a-backend --from-literal=x=y	denied:rbac	-	team-a viewer tries to create a ConfigMap
+role-viewer-read-secrets	a-viewer	kubectl	get secrets -n team-a-backend	denied:rbac	-	team-a viewer tries to read Secrets
+role-viewer-delete-pod	a-viewer	kubectl	delete pods -n team-a-backend -l app.kubernetes.io/name=echo	denied:rbac	-	team-a viewer tries to delete pods
+role-dev-read-secrets	a-dev	kubectl	get secrets -n team-a-backend	denied:rbac	-	team-a developer tries to read Secrets
+role-dev-exec	a-dev	kubectl	exec -n team-a-frontend deploy/client -- true	denied:rbac	-	team-a developer tries to exec into a pod
+role-dev-grant	a-dev	kubectl	create rolebinding conf-dev-grant -n team-a-frontend --clusterrole=tenant-admin --group=team-a:developers	denied:rbac	-	team-a developer tries to make its own group admin
+guard-delete-quota	a-admin	kubectl	delete resourcequota tenant-quota -n team-a-backend	denied:rbac	-	team-a admin tries to delete its ResourceQuota
+guard-edit-limitrange	a-admin	kubectl	label limitrange tenant-limits -n team-a-backend tampered=true	denied:rbac	-	team-a admin tries to modify its LimitRange
+guard-delete-netpol	a-admin	kubectl	delete networkpolicy default-deny-all -n team-a-backend	denied:rbac	-	team-a admin tries to delete the default-deny NetworkPolicy
+guard-create-netpol	a-admin	kubectl	create -f conformance/manifests/allow-all-netpol.yaml	denied:rbac	-	team-a admin tries to add an allow-all NetworkPolicy
+guard-relabel-ns-pss	a-admin	kubectl	label namespace team-a-backend pod-security.kubernetes.io/enforce=privileged --overwrite	denied:rbac	-	team-a admin tries to switch its namespace to the privileged Pod Security level
+guard-bind-cluster-admin	a-admin	kubectl	create rolebinding conf-escalate -n team-a-frontend --clusterrole=cluster-admin --group=team-a:admins	denied:rbac	-	team-a admin tries to bind cluster-admin in its namespace (RBAC escalation check)
+guard-grant-other-tenant	a-admin	kubectl	create rolebinding conf-share -n team-a-frontend --clusterrole=tenant-viewer --group=team-b:admins	denied:policy	-	team-a admin tries to give team-b access to its namespace
+guard-grant-user	a-admin	kubectl	create rolebinding conf-user -n team-a-frontend --clusterrole=tenant-viewer --user=mallory	denied:policy	-	team-a admin tries to grant access to an individual user outside the group model
+cross-list-pods	a-admin	kubectl	get pods -n team-b-apps	denied:rbac	-	team-a admin lists team-b's pods
+cross-read-secrets-api	a-admin	api	GET /api/v1/namespaces/team-b-apps/secrets	denied:rbac	-	team-a admin reads team-b's Secrets (curl, raw API)
+cross-create-cm	a-admin	kubectl	create configmap conf-intrusion -n team-b-apps --from-literal=x=y	denied:rbac	-	team-a admin creates a ConfigMap in team-b's namespace
+cross-delete-deploy	a-dev	kubectl	delete deployment echo -n team-b-apps	denied:rbac	-	team-a developer deletes team-b's Deployment
+cross-scale-deploy	a-dev	kubectl	scale deployment echo -n team-b-apps --replicas=0	denied:rbac	-	team-a developer scales team-b's Deployment to zero
+cross-b-read-cm	b-admin	kubectl	get configmaps -n team-a-backend	denied:rbac	-	team-b admin reads team-a's ConfigMaps
+cross-b-exec	b-admin	kubectl	exec -n team-a-frontend deploy/client -- true	denied:rbac	-	team-b admin execs into team-a's pod
+cross-b-viewer-logs	b-viewer	kubectl	logs -n team-a-backend deploy/echo	denied:rbac	-	team-b viewer reads team-a's logs
+cluster-create-clusterrole	a-admin	kubectl	create clusterrole conf-escalate --verb=get --resource=secrets	denied:rbac	-	team-a admin creates a ClusterRole
+cluster-create-namespace	a-admin	kubectl	create namespace team-a-extra	denied:rbac	-	team-a admin creates a namespace itself
+cluster-create-priorityclass	a-admin	kubectl	create -f conformance/manifests/cases/priorityclass.yaml	denied:rbac	-	team-a admin creates a PriorityClass
+cluster-list-namespaces-api	a-admin	api	GET /api/v1/namespaces	denied:rbac	-	team-a admin lists all namespaces (curl, raw API)
+cluster-list-nodes	a-admin	kubectl	get nodes	denied:rbac	-	team-a admin lists nodes
+cluster-read-crb-api	b-admin	api	GET /apis/rbac.authorization.k8s.io/v1/clusterrolebindings	denied:rbac	-	team-b admin lists ClusterRoleBindings (curl, raw API)
+adm-privileged-pod	a-dev	kubectl	apply -f conformance/manifests/cases/pod-privileged.yaml	denied:pss	-	privileged Pod
+adm-privileged-deploy	a-dev	kubectl	apply -f conformance/manifests/cases/deploy-privileged.yaml	denied:policy	-	privileged container in a Deployment
+adm-hostpath-pod	a-dev	kubectl	apply -f conformance/manifests/cases/pod-hostpath.yaml	denied:pss	-	Pod mounting the node's / with hostPath
+adm-hostpath-deploy	a-dev	kubectl	apply -f conformance/manifests/cases/deploy-hostpath.yaml	denied:policy	-	Deployment mounting the node's / with hostPath
+adm-unapproved-registry	a-dev	kubectl	apply -f conformance/manifests/cases/pod-unapproved-registry.yaml	denied:policy	-	image docker.io/library/nginx (registry not approved)
+adm-missing-labels	a-dev	kubectl	apply -f conformance/manifests/cases/pod-missing-labels.yaml	denied:policy	-	Pod without app.kubernetes.io/name
+adm-loadbalancer	a-dev	kubectl	apply -f conformance/manifests/cases/svc-loadbalancer.yaml	denied:policy	-	Service of type LoadBalancer
+adm-nodeport	a-dev	kubectl	apply -f conformance/manifests/cases/svc-nodeport.yaml	denied:policy	-	Service of type NodePort
+adm-system-priority	a-dev	kubectl	apply -f conformance/manifests/cases/pod-system-priority.yaml	denied:policy	-	Pod with priorityClassName system-cluster-critical
+prio-high-medium-tier	a-dev	kubectl	apply -f conformance/manifests/cases/pod-high-priority-team-a.yaml	allowed	team-a-frontend|pod/conf-high-priority|{.spec.priority}|10000	tenant-high on the medium tier: admitted with priority 10000
+prio-high-small-tier	b-dev	kubectl	apply -f conformance/manifests/cases/pod-high-priority-team-b.yaml	denied:quota	-	tenant-high on the small tier (priority quota is 0)
+limits-defaults	a-dev	kubectl	apply -f conformance/manifests/cases/pod-no-limits.yaml	allowed	team-a-frontend|pod/conf-defaults|{.spec.containers[0].resources.requests.cpu}/{.spec.containers[0].resources.requests.memory}/{.spec.containers[0].resources.limits.cpu}/{.spec.containers[0].resources.limits.memory}|100m/128Mi/200m/256Mi	Pod without resources gets LimitRange defaults (requests 100m/128Mi, limits 200m/256Mi)
+limits-max-per-container	b-dev	kubectl	apply -f conformance/manifests/cases/pod-oversized-team-b.yaml	denied:limitrange	-	container asking for 3 CPU on the small tier (max 1 per container)
+quota-exceeded	b-dev	kubectl	apply -f conformance/manifests/cases/pod-over-quota-team-b.yaml	denied:quota	-	pod requesting 900m CPU when team-b-apps has 800m of its 1 CPU quota left
+net-same-tenant-cross-ns	a-admin	http	team-a-frontend/client http://echo.team-a-backend.svc.cluster.local:8080/hostname	allowed	-	team-a frontend -> team-a backend (same tenant, other namespace)
+net-same-ns	b-admin	http	team-b-apps/client http://echo.team-b-apps.svc.cluster.local:8080/hostname	allowed	-	team-b client -> team-b echo (same namespace)
+net-dns	a-admin	kubectl	exec -n team-a-frontend deploy/client -- nslookup kubernetes.default.svc.cluster.local	allowed	-	tenant pods can resolve DNS (kube-dns egress allowed)
+net-cross-tenant-a-to-b	a-admin	http	team-a-frontend/client http://echo.team-b-apps.svc.cluster.local:8080/hostname	denied:netpol	-	team-a -> team-b echo
+net-cross-tenant-b-to-a	b-admin	http	team-b-apps/client http://echo.team-a-backend.svc.cluster.local:8080/hostname	denied:netpol	-	team-b -> team-a echo
+net-non-tenant-to-tenant	platform	http	platform-probe/client http://echo.team-a-backend.svc.cluster.local:8080/hostname	denied:netpol	-	pod in a non-tenant namespace -> team-a echo (tenant ingress is closed)
+net-egress-internet	a-admin	http	team-a-frontend/client http://1.1.1.1/	denied:netpol	-	team-a -> internet (1.1.1.1:80)

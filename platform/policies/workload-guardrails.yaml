@@ -1,0 +1,236 @@
+# Admission guardrails for workloads in tenant namespaces. Each policy matches
+# Pods; Kyverno's autogen applies the same rules to Deployments, StatefulSets,
+# Jobs and CronJobs, so a bad Deployment is rejected when it is created instead
+# of producing a ReplicaSet that silently fails to create pods.
+apiVersion: policies.kyverno.io/v1
+kind: ValidatingPolicy
+metadata:
+  name: require-workload-labels
+  annotations:
+    policies.kyverno.io/title: Require Workload Labels
+    policies.kyverno.io/category: Multi-Tenancy
+    policies.kyverno.io/severity: medium
+    policies.kyverno.io/subject: Pod
+    policies.kyverno.io/description: >-
+      Tenant pods must carry app.kubernetes.io/name so usage, cost and alerts
+      can be attributed to an application, not just a namespace.
+spec:
+  validationActions: [Deny]
+  matchConstraints:
+    namespaceSelector:
+      matchExpressions:
+        - key: tenancy.io/tenant
+          operator: Exists
+    resourceRules:
+      - apiGroups: [""]
+        apiVersions: [v1]
+        operations: [CREATE, UPDATE]
+        resources: [pods]
+  validations:
+    - expression: >-
+        object.metadata.?labels[?'app.kubernetes.io/name'].orValue('') != ''
+      message: tenant workloads must set the app.kubernetes.io/name label
+---
+apiVersion: policies.kyverno.io/v1
+kind: ValidatingPolicy
+metadata:
+  name: restrict-image-registries
+  annotations:
+    policies.kyverno.io/title: Restrict Image Registries
+    policies.kyverno.io/category: Supply Chain Security
+    policies.kyverno.io/severity: high
+    policies.kyverno.io/subject: Pod
+    policies.kyverno.io/description: >-
+      Tenant images must come from an approved registry path, written out in
+      full (no implicit docker.io). Everything else, including other Docker Hub
+      repositories, is rejected.
+spec:
+  validationActions: [Deny]
+  matchConstraints:
+    namespaceSelector:
+      matchExpressions:
+        - key: tenancy.io/tenant
+          operator: Exists
+    resourceRules:
+      - apiGroups: [""]
+        apiVersions: [v1]
+        operations: [CREATE, UPDATE]
+        resources: [pods]
+  variables:
+    - name: approved
+      expression: >-
+        ['registry.k8s.io/', 'ghcr.io/ahmedelgmal310/', 'docker.io/curlimages/curl']
+    - name: images
+      expression: >-
+        (object.spec.containers +
+         object.spec.?initContainers.orValue([]) +
+         object.spec.?ephemeralContainers.orValue([])).map(c, c.image)
+    - name: rejected
+      expression: >-
+        variables.images.filter(i, !variables.approved.exists(p, i.startsWith(p)))
+  validations:
+    - expression: size(variables.rejected) == 0
+      messageExpression: >-
+        'image ' + variables.rejected[0] + ' is not from an approved registry (' +
+        variables.approved.join(', ') + ')'
+---
+apiVersion: policies.kyverno.io/v1
+kind: ValidatingPolicy
+metadata:
+  name: disallow-privileged-and-host-access
+  annotations:
+    policies.kyverno.io/title: Disallow Privileged and Host Access
+    policies.kyverno.io/category: Pod Security
+    policies.kyverno.io/severity: high
+    policies.kyverno.io/subject: Pod
+    policies.kyverno.io/description: >-
+      Defence in depth on top of the restricted Pod Security Standard: no
+      privileged containers, no privilege escalation, no hostPath volumes and
+      no host network, PID, IPC or ports. Unlike Pod Security admission, this
+      also rejects the Deployment or Job itself, not only its pods.
+spec:
+  validationActions: [Deny]
+  matchConstraints:
+    namespaceSelector:
+      matchExpressions:
+        - key: tenancy.io/tenant
+          operator: Exists
+    resourceRules:
+      - apiGroups: [""]
+        apiVersions: [v1]
+        operations: [CREATE, UPDATE]
+        resources: [pods]
+  variables:
+    - name: containers
+      expression: >-
+        object.spec.containers +
+        object.spec.?initContainers.orValue([]) +
+        object.spec.?ephemeralContainers.orValue([])
+  validations:
+    - expression: >-
+        variables.containers.all(c, !c.?securityContext.?privileged.orValue(false))
+      message: privileged containers are not allowed in tenant namespaces
+    - expression: >-
+        variables.containers.all(c, !c.?securityContext.?allowPrivilegeEscalation.orValue(false))
+      message: allowPrivilegeEscalation must not be true
+    - expression: >-
+        object.spec.?volumes.orValue([]).all(v, !has(v.hostPath))
+      message: hostPath volumes are not allowed in tenant namespaces
+    - expression: >-
+        !object.spec.?hostNetwork.orValue(false) &&
+        !object.spec.?hostPID.orValue(false) &&
+        !object.spec.?hostIPC.orValue(false)
+      message: host network, PID and IPC namespaces are not allowed
+    - expression: >-
+        variables.containers.all(c, c.?ports.orValue([]).all(p, p.?hostPort.orValue(0) == 0))
+      message: hostPort is not allowed
+---
+apiVersion: policies.kyverno.io/v1
+kind: ValidatingPolicy
+metadata:
+  name: restrict-priority-classes
+  annotations:
+    policies.kyverno.io/title: Restrict Priority Classes
+    policies.kyverno.io/category: Multi-Tenancy
+    policies.kyverno.io/severity: high
+    policies.kyverno.io/subject: Pod
+    policies.kyverno.io/description: >-
+      Tenants may only use the tenant priority classes. system-cluster-critical
+      and system-node-critical are usable from any namespace by default, which
+      would let a tenant outrank cluster components.
+spec:
+  validationActions: [Deny]
+  matchConstraints:
+    namespaceSelector:
+      matchExpressions:
+        - key: tenancy.io/tenant
+          operator: Exists
+    resourceRules:
+      - apiGroups: [""]
+        apiVersions: [v1]
+        operations: [CREATE]
+        resources: [pods]
+  validations:
+    - expression: >-
+        object.spec.?priorityClassName.orValue('') in ['', 'tenant-standard', 'tenant-high']
+      messageExpression: >-
+        'priority class ' + object.spec.?priorityClassName.orValue('') +
+        ' is not available to tenants (use tenant-standard or tenant-high)'
+---
+apiVersion: policies.kyverno.io/v1
+kind: ValidatingPolicy
+metadata:
+  name: restrict-service-types
+  annotations:
+    policies.kyverno.io/title: Restrict Service Types
+    policies.kyverno.io/category: Multi-Tenancy
+    policies.kyverno.io/severity: high
+    policies.kyverno.io/subject: Service
+    policies.kyverno.io/description: >-
+      Tenants get ClusterIP services only. LoadBalancer and NodePort expose a
+      tenant directly outside the cluster and consume shared node ports and
+      cloud load balancers; ExternalName can point a tenant's service name at
+      another tenant's service; externalIPs can intercept other traffic
+      (CVE-2020-8554). Exposure goes through the platform's ingress instead.
+spec:
+  validationActions: [Deny]
+  matchConstraints:
+    namespaceSelector:
+      matchExpressions:
+        - key: tenancy.io/tenant
+          operator: Exists
+    resourceRules:
+      - apiGroups: [""]
+        apiVersions: [v1]
+        operations: [CREATE, UPDATE]
+        resources: [services]
+  validations:
+    - expression: object.spec.?type.orValue('ClusterIP') == 'ClusterIP'
+      messageExpression: >-
+        'service type ' + object.spec.?type.orValue('ClusterIP') + ' is not allowed for tenants (ClusterIP only)'
+    - expression: size(object.spec.?externalIPs.orValue([])) == 0
+      message: externalIPs are not allowed for tenants
+---
+apiVersion: policies.kyverno.io/v1
+kind: ValidatingPolicy
+metadata:
+  name: restrict-tenant-rolebindings
+  annotations:
+    policies.kyverno.io/title: Restrict Tenant RoleBindings
+    policies.kyverno.io/category: Multi-Tenancy
+    policies.kyverno.io/severity: high
+    policies.kyverno.io/subject: RoleBinding
+    policies.kyverno.io/description: >-
+      RoleBindings in a tenant namespace may only grant the tenant roles, and
+      only to the tenant's own groups or to ServiceAccounts in the same
+      namespace. A tenant admin cannot hand access to another team, and cannot
+      bind the built-in admin/edit roles.
+spec:
+  validationActions: [Deny]
+  matchConstraints:
+    namespaceSelector:
+      matchExpressions:
+        - key: tenancy.io/tenant
+          operator: Exists
+    resourceRules:
+      - apiGroups: [rbac.authorization.k8s.io]
+        apiVersions: [v1]
+        operations: [CREATE, UPDATE]
+        resources: [rolebindings]
+  variables:
+    - name: tenant
+      expression: namespaceObject.metadata.labels['tenancy.io/tenant']
+  validations:
+    - expression: >-
+        object.roleRef.kind == 'ClusterRole' &&
+        object.roleRef.name in ['tenant-admin', 'tenant-developer', 'tenant-viewer']
+      messageExpression: >-
+        'tenant RoleBindings may only reference tenant-admin, tenant-developer or tenant-viewer, not ' +
+        object.roleRef.kind + '/' + object.roleRef.name
+    - expression: >-
+        object.?subjects.orValue([]).all(s,
+          (s.kind == 'Group' && s.name.startsWith(variables.tenant + ':')) ||
+          (s.kind == 'ServiceAccount' && s.?namespace.orValue(object.metadata.namespace) == object.metadata.namespace))
+      messageExpression: >-
+        'subjects must be groups of tenant ' + variables.tenant + ' (' + variables.tenant +
+        ':*) or ServiceAccounts in ' + object.metadata.namespace

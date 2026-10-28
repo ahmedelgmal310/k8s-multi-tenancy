@@ -1,0 +1,41 @@
+# Denied: hostPath volume in a Deployment.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: conf-hostpath
+  namespace: team-a-frontend
+  labels:
+    app.kubernetes.io/name: conformance
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: conformance
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: conformance
+    spec:
+      automountServiceAccountToken: false
+      terminationGracePeriodSeconds: 1
+      volumes:
+        - name: host
+          hostPath:
+            path: /
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65534
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: app
+          image: registry.k8s.io/e2e-test-images/agnhost:2.63.0@sha256:a62f40481e05709988fe44e5035b2e0f553cd52bf0ae4e83614928255b00e8c1
+          args: [netexec, --http-port=8080]
+          volumeMounts:
+            - name: host
+              mountPath: /host
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: [ALL]

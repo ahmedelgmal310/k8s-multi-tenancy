@@ -1,0 +1,14 @@
+# Denied: LoadBalancer service.
+apiVersion: v1
+kind: Service
+metadata:
+  name: conf-lb
+  namespace: team-a-frontend
+  labels:
+    app.kubernetes.io/name: conformance
+spec:
+  type: LoadBalancer
+  selector:
+    app.kubernetes.io/name: conformance
+  ports:
+    - port: 8080
