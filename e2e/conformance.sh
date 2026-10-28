@@ -147,7 +147,7 @@ log "conformance: $((total - failures))/${total} cases as expected"
 # Remove what the allowed rows created, so later steps start from a known state.
 for ns in "${TENANT_NAMESPACES[@]}"; do
   kubectl get deploy,pod,svc,configmap,secret,rolebinding -n "$ns" -o name 2>/dev/null |
-    grep '/conf-' | xargs -r kubectl delete -n "$ns" --wait=true --ignore-not-found >/dev/null
+    { grep '/conf-' || true; } | xargs -r kubectl delete -n "$ns" --wait=true --ignore-not-found >/dev/null
 done
 
 [[ $failures -eq 0 ]] || die "${failures} conformance case(s) did not match the expected result"
