@@ -6,6 +6,7 @@ RESULTS_DIR="${RESULTS_DIR:-e2e-results}"
 # Per-run test identities (private keys, client certificates, kubeconfigs).
 # Kept outside the repository and discarded with the runner.
 ID_DIR="${ID_DIR:-${RUNNER_TEMP:-/tmp}/tenancy-identities}"
+# shellcheck disable=SC2034 # used by the scripts that source this file
 TENANT_NAMESPACES=(team-a-frontend team-a-backend team-b-apps)
 mkdir -p "$RESULTS_DIR"
 
