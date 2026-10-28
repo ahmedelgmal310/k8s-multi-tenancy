@@ -20,6 +20,10 @@ spec:
       enabled: true
     generateExisting:
       enabled: true
+    # Deleting this policy (or uninstalling Kyverno) must not strip every
+    # tenant of its NetworkPolicies and quotas at once.
+    orphanDownstreamOnPolicyDelete:
+      enabled: true
   matchConstraints:
     resourceRules:
       - apiGroups: [""]
